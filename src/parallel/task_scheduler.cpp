@@ -22,7 +22,7 @@
 #elif defined(__GNUC__)
 #include <sched.h>
 #include <unistd.h>
-#if defined(__GLIBC__)
+#if defined(__GLIBC__) || defined(__APPLE__)
 #include <pthread.h>
 #endif
 #endif
@@ -400,7 +400,14 @@ void TaskScheduler::ExecuteTasks(idx_t max_tasks) {
 }
 
 #ifndef DUCKDB_NO_THREADS
-static void ThreadExecuteTasks(TaskScheduler *scheduler, atomic<bool> *marker) {
+static void ThreadExecuteTasks(TaskScheduler *scheduler, atomic<bool> *marker, idx_t thread_index) {
+	char thread_name[16];
+	snprintf(thread_name, sizeof(thread_name), "duckdb-worker-%d", static_cast<int>(thread_index));
+#if defined(__APPLE__)
+	pthread_setname_np(thread_name);
+#elif defined(__linux__) && defined(__GLIBC__)
+	pthread_setname_np(pthread_self(), thread_name);
+#endif
 	scheduler->ExecuteForever(marker);
 }
 #endif
@@ -589,7 +596,7 @@ void TaskScheduler::RelaunchThreadsInternal(int32_t n, bool destroy) {
 			auto marker = unique_ptr<atomic<bool>>(new atomic<bool>(true));
 			unique_ptr<thread> worker_thread;
 			try {
-				worker_thread = make_uniq<thread>(ThreadExecuteTasks, this, marker.get());
+				worker_thread = make_uniq<thread>(ThreadExecuteTasks, this, marker.get(), threads.size());
 				if (can_pin) {
 					SetThreadAffinity(*worker_thread, available_cpus, threads.size());
 				}
